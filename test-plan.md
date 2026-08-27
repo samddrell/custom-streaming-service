@@ -21,7 +21,7 @@ simple shell script) runs against a real running daemon and a fixture USB drive.
 - A test USB drive (or a directory standing in for one during dev) mounted at a fixed path,
   containing a small fixture library:
   ```
-  /mnt/music/
+  /mnt/x10pro/music/
     ArtistA/AlbumX/01 First.mp3
     ArtistA/AlbumX/02 Second.mp3
     ArtistB/AlbumY/01 Only.mp3
@@ -52,6 +52,7 @@ simple shell script) runs against a real running daemon and a fixture USB drive.
 | requirements §5 | Track has no stored position; Album/Playlist order preserved | UT-4, UT-5, IT-2 |
 | requirements §6 / design §5 | Index + playlists on Jetson-local storage; drive holds only mp3s | IT-15, DT-1 |
 | design §3.1 | Incremental indexing, no re-tagging of known paths, title-tag/filename name derivation | UT-1, UT-2, UT-3, UT-7 |
+| design §3.1, §3.1.3 | Missing album/artist tag groups into synthetic "Unknown Album"/"Unknown Artist", not an empty-string bucket or dropped from grouping; `library.json` itself keeps the raw empty value | UT-8 |
 | design §6 | Error handling: unknown name (404), invalid transition (409), missing drive (exit non-zero), malformed playlists.json (warn + continue), bad playlist entry (warn + skip) | IT-5, IT-8, DT-3, IT-16, IT-17 |
 | design §7 | systemd starts after mount | DT-1 |
 | requirements §2 (out of scope) | seek, volume, hot-plug, auth, multi-listener are NOT present | OT-1 – OT-5 |
@@ -67,6 +68,7 @@ simple shell script) runs against a real running daemon and a fixture USB drive.
 | UT-5 | Playlist order preserved | Load the fixture `playlists.json`'s "Mix" playlist. | Resolved track list order exactly matches the JSON array order, not alphabetical or path order. |
 | UT-6 | Playlist references unknown track path | `playlists.json` contains a path not present in the index. | Resolved playlist excludes that entry; the other entries are present and in their original relative order; a warning is logged for the dropped entry (design §3.1/§6). |
 | UT-7 | Track name derivation | Index the fixture drive (see §2 — `First`/`Second` have title tags, `Only` does not). | `First` and `Second` tracks' `name` fields equal their ID3 title tag values; `Only`'s `name` field equals `"01 Only"` (filename with `.mp3` stripped, per the fallback rule in design §3.1). |
+| UT-8 | Missing album/artist tag groups into "Unknown" bucket | Add a 4th fixture file with a title tag but no album/artist tags, re-run indexing, then inspect the resolved Album/Artist collections. | `library.json`'s stored `album`/`artist` for that track are empty strings (not fabricated at index time — design §3.1); the resolved Album/Artist groupings show it filed under `"Unknown Album"`/`"Unknown Artist"` alongside any other untagged tracks, not under an empty-string key and not silently dropped (design §3.1.3). |
 
 ## 5. Integration Tests — Control API (curl)
 
@@ -110,7 +112,7 @@ Assume a clean daemon start against the fixture drive/playlists before this bloc
 
 | ID | Case | Steps | Expected |
 |---|---|---|---|
-| DT-1 | Starts after drive mount | Reboot the Jetson with the USB drive attached. | `playback-controld` is running only after `mnt-music.mount` is active; `systemctl status playback-controld` shows it started after the mount in the journal timestamps. |
+| DT-1 | Starts after drive mount | Reboot the Jetson with the USB drive attached. | `playback-controld` is running only after `mnt-x10pro.mount` is active; `systemctl status playback-controld` shows it started after the mount in the journal timestamps. |
 | DT-3 | Missing drive at startup | Start the Jetson (or manually start the service) with the drive not mounted at all. | Per design §6, the daemon logs an error and exits non-zero; systemd shows a failed unit rather than a silently-running-but-broken daemon. |
 
 Note: the daemon is deliberately **not** torn down automatically if the mount disappears after
@@ -128,7 +130,7 @@ These confirm v1 correctly does **not** support things explicitly deferred in re
 | OT-1 | No seek endpoint | Any request to a seek-style route returns `404` (route doesn't exist) — no partial/broken seek behavior. |
 | OT-2 | No volume endpoint | Same as OT-1 for volume control. |
 | OT-3 | No auth required | Control/stream requests succeed with no credentials, confirming the "VLAN boundary is the only access control" decision (requirements §7) — not a bug if a stray unauthenticated request works, that's the design. |
-| OT-4 | Drive disconnect mid-playback is unhandled | Physically remove the drive while streaming, and separately, run `systemctl stop mnt-music.mount` while the daemon is running and idle. Documented as undefined behavior (requirements §6, design §7) — record what actually happens (likely a read error, or the daemon continuing to run with a now-missing drive) but this is informational, not a pass/fail gate for v1. |
+| OT-4 | Drive disconnect mid-playback is unhandled | Physically remove the drive while streaming, and separately, run `systemctl stop mnt-x10pro.mount` while the daemon is running and idle. Documented as undefined behavior (requirements §6, design §7) — record what actually happens (likely a read error, or the daemon continuing to run with a now-missing drive) but this is informational, not a pass/fail gate for v1. |
 | OT-5 | Multiple simultaneous `/stream` clients | Not a supported configuration (requirements §4.3) and not required to behave any particular way — not tested as pass/fail; only note in the report if something surprising (e.g. a crash) happens. |
 
 ## 10. Exit Criteria for v1

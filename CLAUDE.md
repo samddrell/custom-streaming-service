@@ -42,6 +42,13 @@ Docs are finished and internally consistent. **No implementation exists yet** �
 - **A track's `name`** (the lookup key for `/play?type=track&name=...`) comes from the ID3
   title tag, falling back to the filename with its extension stripped if no title tag is
   present. This is distinct from `artist`/`album`/`duration`, which are ID3-derived metadata.
+- **A track with a missing/empty `album` or `artist` ID3 tag groups into a synthetic
+  `"Unknown Album"`/`"Unknown Artist"` collection**, not an empty-string-keyed bucket and not
+  dropped from grouping. This substitution happens only when building the in-memory Album/Artist
+  `TrackCollection`s (design.md §3.1.3) — `library.json` itself keeps whatever TagLib actually
+  read (including empty strings), so a later real tag fix is picked up normally after the usual
+  delete-`library.json`-and-rebuild flow, instead of being masked by a placeholder that got
+  persisted.
 - **`library.json` (the tag-index cache) and `playlists.json` live on Jetson-local storage**
   (e.g. `/var/lib/playback-controld/`) — **not** on the USB drive, which holds only mp3 files.
   This was reversed from an earlier draft that put both on the drive for portability; the user
@@ -53,7 +60,7 @@ Docs are finished and internally consistent. **No implementation exists yet** �
 - **A `playlists.json` entry referencing a path not in the index is dropped and logged as a
   warning at load time** — not a fatal error for the whole file, not surfaced to the curl
   client, and the playlist just plays the remaining valid tracks in order.
-- **The systemd unit uses `After=mnt-music.mount`, deliberately not `Requires=`.** Hot-plug/
+- **The systemd unit uses `After=mnt-x10pro.mount`, deliberately not `Requires=`.** Hot-plug/
   disconnect handling is explicitly out of scope for v1 (requirements.md §2); `Requires=` would
   have systemd tear the daemon down automatically on mount loss, which is disconnect handling by
   another name. Don't add it back for "robustness" without checking — that's exactly the kind
