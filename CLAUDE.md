@@ -18,8 +18,15 @@ conflict to the user rather than silently picking one side.
 
 ## Status
 
-Docs are finished and internally consistent. **No implementation exists yet** — no
-`CMakeLists.txt`, no `src/`. Starting from `design.md` §8's source layout is the next step.
+Docs are finished and internally consistent. **v1 is implemented**, builds, and has been smoke-
+tested against the real drive (`playback-controld/` — `src/`, `tests/`, `CMakeLists.txt`,
+`playback-controld.service`). `MusicLibrary`'s Catch2 unit tests (UT-1–UT-8) all pass, and a
+manual pass of the curl-driven integration checks (play/stream byte-identity, pause/resume
+mid-stream, interrupt-via-`/play`, interrupt-via-`/stop`, 404/409 error cases, next/previous
+boundaries) confirmed against the real 65-track library — see test-plan.md §5–§6 for the case
+list. Remaining test-plan.md work: IT-14/IT-15/IT-16/IT-17 (browse/storage/playlist edge cases —
+`playlists.json` doesn't exist yet since it's hand-authored) and the DT-* deployment tests (need
+an actual reboot + systemd install on the Jetson, not just running the binary manually).
 
 ## Load-bearing decisions (don't relitigate these without checking with the user first)
 
@@ -33,7 +40,12 @@ Docs are finished and internally consistent. **No implementation exists yet** �
   (returns `false`, causing an abrupt disconnect that surfaces as a `curl` transfer error on the
   interrupted client) when it detects a `generation` mismatch. This *is* the "alert the
   interrupted listener" behavior from requirements.md §4.3 — there is no separate notification
-  endpoint, and there shouldn't be one added.
+  endpoint, and there shouldn't be one added. **This must be registered via
+  `Response::set_chunked_content_provider`, not `set_content_provider`** — verified against a
+  real `curl` client, not just the spec: without `Transfer-Encoding: chunked`, an early
+  connection close is valid, *complete* HTTP framing and `curl` exits 0 on a silently-truncated
+  file. Only chunked encoding cut off before its terminator is a detectable error (design.md
+  §3.4).
 - **`/pause` is a real block, not a status flag.** `StreamRoute` blocks on the condition
   variable while `status == Paused`, holding its already-open file handle's read position, and
   resumes sending from exactly that position on `/resume` — no seeking involved. This was a
@@ -69,6 +81,13 @@ Docs are finished and internally consistent. **No implementation exists yet** �
 - **Explicitly out of scope for v1**: seek, volume control, multiple simultaneous `/stream`
   listeners, USB hot-plug handling, any non-curl client, and a playlist-authoring API
   (`playlists.json` is hand-edited by the user directly).
+- **Implementation-level decisions not in requirements.md/design.md, made during coding**:
+  no separate `/status` route — every control response's JSON body carries the resulting
+  `status` inline (e.g. `POST /pause` → `{"ok":true,"status":"Paused"}`); a track-name
+  collision (two tracks resolving to the same `name`) is first-indexed-wins with a logged
+  warning, matching the project's established warn-and-degrade pattern elsewhere; port `8080`,
+  bound on `0.0.0.0`, hardcoded (no config file) alongside the fixed `/mnt/x10pro/music` and
+  `/var/lib/playback-controld` paths.
 
 ## Collaboration notes
 
@@ -87,11 +106,14 @@ Docs are finished and internally consistent. **No implementation exists yet** �
 
 ## Suggested next steps
 
-1. Scaffold the CMake project per `design.md` §8's source layout.
-2. Vendor `cpp-httplib` and `nlohmann/json` as single headers under `third_party/`; link
-   `TagLib` and `Catch2` as real build dependencies.
-3. Implement `MusicLibrary` first (`design.md` §3.1) — it's unit-testable in isolation
-   (`test-plan.md` §4, UT-1–UT-7) before any networking code exists.
-4. Implement `PlaybackSession`, then `ControlRoutes` and `StreamRoute` (`design.md` §3.2–3.4).
-5. Work through `test-plan.md`'s IT/DT cases as each piece lands; it's written to be run
-   against a real fixture drive and a running daemon, not automated end-to-end.
+v1 is implemented and smoke-tested (see Status above). What's left:
+
+1. Write a `playlists.json` on the Jetson (`/var/lib/playback-controld/playlists.json`) and
+   run IT-4, IT-16, IT-17 (playlist play, malformed-JSON handling, bad-entry handling).
+2. `sudo cp build/playback-controld /usr/local/bin/`, install
+   `playback-controld.service` (`sudo cp playback-controld.service
+   /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now
+   playback-controld`), then run the DT-* deployment tests (test-plan.md §8) — needs an actual
+   reboot with the drive attached, not just running the binary by hand like this session did.
+3. IT-15 (drive holds no generated files) and a final read-through of the remaining IT cases in
+   test-plan.md §5–§7 not yet exercised.

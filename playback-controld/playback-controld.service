@@ -1,0 +1,15 @@
+[Unit]
+Description=playback-controld — Jetson mp3 streaming daemon
+After=mnt-x10pro.mount
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/playback-controld
+User=metavi
+# Creates/owns /var/lib/playback-controld (matches kStorageDir in main.cpp) so the daemon
+# doesn't need root just to write library.json/playlists.json.
+StateDirectory=playback-controld
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -210,7 +210,16 @@ corresponding non-2xx HTTP status.
 
 1. Lock `PlaybackSession`, read `current_track` and `generation`. If nothing is playing, return
    404 immediately.
-2. Register a chunked content provider (`httplib::ContentProviderWithoutLength`) that:
+2. Register a provider via `Response::set_chunked_content_provider` (Transfer-Encoding:
+   chunked), using the `httplib::ContentProviderWithoutLength` callback signature, that:
+   - **Must be `set_chunked_content_provider`, not the plain `set_content_provider`** — both
+     accept the same `ContentProviderWithoutLength` callback shape, but only chunked framing has
+     an explicit terminator. Verified against a real `curl` client during implementation: with
+     the plain (non-chunked, no `Content-Length`) provider, closing the connection early is
+     valid HTTP framing (RFC 9112 §6) — `curl` sees a shorter-than-usual but *complete* body and
+     exits 0. Only chunked encoding, cut off before its `0\r\n\r\n` terminator, is a detectable
+     protocol violation — that's what actually produces `curl: (18) transfer closed with
+     outstanding read data remaining` on the interrupted client, matching requirements.md §4.3.
    - Opens the current track's file on the USB drive, keeping the file handle local to this
      request's callback (its read position is the stream's implicit playback position — no
      separate position field is kept in `PlaybackSession`).
