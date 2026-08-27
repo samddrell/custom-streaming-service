@@ -1,0 +1,17 @@
+# Editor backup/swap files
+*~
+*.un~
+
+# CMake / build output
+build/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+Makefile
+*.o
+*.obj
+
+# Vendored single-header/third-party libs, if pulled in later
+# (uncomment if you decide to fetch rather than vendor)
+# third_party/
