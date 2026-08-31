@@ -64,11 +64,21 @@ you tell the Jetson what to play next. This mirrors `playback-controld`'s existi
 shape, it just replaces `curl | mpv` and raw `curl -X POST ...` with named commands and
 automatic reconnect-on-interrupt.
 
+**Required ordering: `gj play` before `gj listen`.** `gj listen`'s very first connection to
+`/stream` behaves exactly like any other connection — if nothing has been played yet (or
+everything has stopped), it immediately gets `404 nothing playing` and, per §5.2, exits right
+away rather than waiting around. There is no window where `gj listen` polls for a future
+`gj play` to arrive from another terminal. So in practice: issue `gj play <type> <name>` first,
+*then* start `gj listen` (or start it while something is already playing). This constraint only
+applies to (re)starting `gj listen` from a stopped/never-started state — once it's up and
+connected, a later `gj play`/`gj skip`/`gj previous` from elsewhere works seamlessly via the
+reconnect mechanism (§5.2) without needing to restart `gj listen`.
+
 ## 4. Commands
 
 | Command | Calls | Behavior |
 |---|---|---|
-| `gj listen` | `GET /stream` (repeatedly) | Opens the stream, pipes bytes to `mpv` via stdin. On disconnect (whether from a deliberate interrupt via `/play`, `/stop`, `/next`, `/previous`, or a genuine network error — indistinguishable from the client side, see §5.2), immediately retries `GET /stream`. If the retry returns `404 nothing playing`, `gj listen` prints that and exits (does not poll/wait). Blocks the terminal until it exits. |
+| `gj listen` | `GET /stream` (repeatedly) | Opens the stream, pipes bytes to `mpv` via stdin. Whenever the connection ends, for any reason, immediately retries `GET /stream` (see §5.2). If the retry returns `404 nothing playing`, `gj listen` prints that and exits (does not poll/wait). Requires something to already be playing when it starts — see §3's required-ordering note. Blocks the terminal until it exits. |
 | `gj play <track\|album\|artist\|playlist> <name>` | `POST /play?type=...&name=...` | Starts/replaces playback. Prints the resulting current track on success; prints the daemon's error and exits non-zero on 400/404. |
 | `gj pause` | `POST /pause` | Pauses. Non-zero exit + printed error on 409 (not currently playing). |
 | `gj resume` | `POST /resume` | Resumes. Non-zero exit + printed error on 409 (not currently paused). |
@@ -96,24 +106,32 @@ refused, timeout), so `gj` is usable in scripts/conditionals, not just interacti
 
 ### 5.2 Reconnect-on-interrupt (`gj listen`)
 
-`playback-controld` has no way to tell a connected `/stream` client *why* its connection ended
-— an intentional interrupt (`generation` bumped by `/play`/`/stop`/`/next`/`/previous`) and a
-genuine network failure both surface identically as an aborted chunked transfer
-(`stream_route.cpp`). `gj listen` doesn't try to distinguish them: on any disconnect, it simply
-retries `GET /stream`, which naturally picks up whatever `playback-controld` currently has as
-`current_track` at reconnect time. This works because `/stream` reads `session_.current_track`
-fresh on every new connection, not just once at startup.
+`gj listen` doesn't try to figure out *why* a `/stream` connection ended — it just reconnects
+every time one does, and lets the reconnect's own result decide what happens next. This works
+uniformly across every way a connection can end, because `playback-controld` guarantees that
+`current_track` accurately reflects "what should play next" at all times, including when nothing
+should:
 
-- If the retry succeeds with a track streaming, playback continues seamlessly — this is what
-  makes `gj skip`/`gj previous`/`gj play <new thing>` from another terminal "just work" while
-  `gj listen` is running.
-- If the retry gets `404 nothing playing` (e.g. someone ran `gj stop`), `gj listen` prints that
-  and exits, rather than polling indefinitely for playback to resume.
-- A real network failure (Jetson unreachable) will also cause the reconnect attempt to fail;
-  v1 does not implement retry backoff/limits for this case beyond what's described above —
-  behavior here is a single immediate retry, and if that also fails, `gj listen` reports the
-  error and exits. (Distinguishing "transient network blip, keep retrying" from "daemon is
-  genuinely down" is future scope if it turns out to matter in practice.)
+- **Interrupted by another client** (`/play`/`/stop`/`/next`/`/previous` bumping `generation`
+  elsewhere): the transfer aborts mid-stream. Reconnecting immediately picks up whatever's now
+  current, since `/stream` reads `session_.current_track` fresh on every new connection — this is
+  what makes `gj skip`/`gj previous`/`gj play <new thing>` from another terminal "just work"
+  while `gj listen` is running.
+- **The queue finishes playing naturally** (auto-advance ran out of tracks — `playback-controld`
+  requirements.md §4.4/design.md §3.4): the transfer ends *cleanly*, but `playback-controld`
+  resets session state the same way `/stop` does when this happens, specifically so this case
+  doesn't need special handling here — reconnecting gets `404`, exactly like case below.
+- **`404 nothing playing`** (either of the above once state is reset, or an explicit `gj stop`):
+  `gj listen` prints that and exits, rather than polling indefinitely for playback to resume.
+- **A real network failure** (Jetson unreachable) also surfaces as a failed reconnect attempt;
+  v1 does not implement retry backoff/limits beyond a single immediate retry — if that also
+  fails, `gj listen` reports the error and exits. (Distinguishing "transient network blip, keep
+  retrying" from "daemon is genuinely down" is future scope if it turns out to matter in
+  practice.)
+
+Because `gj listen` never needs to tell a clean completion apart from an aborted one — both just
+trigger "reconnect and see what happens" — it doesn't need to inspect the HTTP client library's
+success/error result at all; checking the reconnect's status code (`200` vs `404`) is sufficient.
 
 ### 5.3 Audio playback
 
@@ -142,3 +160,11 @@ None currently blocking — design.md is the next step. Revisit if `192.168.86.2
 Jetson gets a new DHCP lease, a static reservation is set up, etc.) — since the address is a
 hardcoded constant per §6, that would require a rebuild rather than a config change, which is
 an accepted tradeoff for v1's simplicity but worth knowing about going in.
+
+**Dependency on `playback-controld`:** §5.2's simplified reconnect logic assumes
+`playback-controld` resets `current_track`/`status` to the same state `/stop` produces when the
+queue finishes naturally via auto-advance. That reset is not yet implemented as of this writing
+— it's a small follow-up to the already-merged auto-advance work, tracked separately in
+`playback-controld`'s own docs. Don't start implementing `gj listen` against this section until
+that lands, or the last track of every queue will loop forever (see the discussion that led to
+this section for why).
