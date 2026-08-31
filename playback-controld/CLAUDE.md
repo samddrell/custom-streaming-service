@@ -28,6 +28,11 @@ list. Remaining test-plan.md work: IT-14/IT-15/IT-16/IT-17 (browse/storage/playl
 `playlists.json` doesn't exist yet since it's hand-authored) and the DT-* deployment tests (need
 an actual reboot + systemd install on the Jetson, not just running the binary manually).
 
+**In progress (`auto-advance` branch, off `master`):** queue auto-advance (requirements.md §4.4,
+design.md §3.2/§3.4) — docs are updated; code changes (`PlaybackSession::advance()`,
+`StreamRoute`'s EOF handling) and the new IT-20/21/22 test cases still need implementing/running
+against the real drive before this merges. Don't treat auto-advance as shipped until that's done.
+
 ## Load-bearing decisions (don't relitigate these without checking with the user first)
 
 - **Single process, single `httplib::Server`, single port.** `ControlRoutes` and `StreamRoute`
@@ -46,6 +51,17 @@ an actual reboot + systemd install on the Jetson, not just running the binary ma
   connection close is valid, *complete* HTTP framing and `curl` exits 0 on a silently-truncated
   file. Only chunked encoding cut off before its terminator is a detectable error (design.md
   §3.4).
+- **Queue auto-advance (requirements.md §4.4, design.md §3.2/§3.4)**: when a track finishes
+  cleanly (EOF) and more tracks remain in `current_queue`, `StreamRoute` itself advances
+  `queue_position`/`current_track` (via the new `PlaybackSession::advance()`, shared with
+  `ControlRoutes::advanceQueue`/`/next`/`/previous`) and keeps streaming on the *same* connection
+  — no `sink.done()`, no reconnect needed. **This must not bump `generation` or call
+  `cv.notify_all()`** — it's the same playback session continuing, not an interrupt; bumping
+  `generation` here would make ordinary track-to-track playback indistinguishable from an
+  external `/play`/`/stop`/`/next`/`/previous`, breaking the interrupt mechanism above. Added
+  after discovering, while designing `cli-lib-controld`, that a multi-track `/play` built a real
+  queue but nothing ever advanced through it — a naive reconnecting client would just replay
+  track 1 forever.
 - **`/pause` is a real block, not a status flag.** `StreamRoute` blocks on the condition
   variable while `status == Paused`, holding its already-open file handle's read position, and
   resumes sending from exactly that position on `/resume` — no seeking involved. This was a
