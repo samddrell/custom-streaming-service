@@ -84,6 +84,15 @@ void StreamRoute::handleStream(const httplib::Request&, httplib::Response& res) 
             advanced = session_.advance(+1);
             if (advanced) {
               next_path = library_.resolveAbsolutePath(*session_.current_track);
+            } else {
+              // Queue exhausted: reset state the same way handleStop does, so a client
+              // reconnecting after this point gets 404 instead of replaying the last track
+              // forever. Still no generation bump / cv.notify_all() — this connection is ending
+              // on its own, not being interrupted by another client.
+              session_.current_track.reset();
+              session_.current_queue.clear();
+              session_.queue_position = 0;
+              session_.status = PlaybackSession::Status::Stopped;
             }
           }
           if (!advanced) {

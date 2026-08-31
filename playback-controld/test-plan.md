@@ -49,7 +49,7 @@ simple shell script) runs against a real running daemon and a fixture USB drive.
 | requirements §4.1 | Command surface: play/pause/resume/stop/next/previous/browse | IT-1 – IT-9, IT-14, IT-18 |
 | requirements §4.2 | Raw mp3 passthrough streaming | IT-10, IT-11 |
 | requirements §4.3 / design §3.2, §3.4 | Single active stream; interrupted stream drops abruptly; pause actually halts/resumes delivery | IT-12, IT-13, IT-19, IT-19b, IT-19c |
-| requirements §4.4 / design §3.2, §3.4 | Queue auto-advance: progresses without manual `/next`, doesn't trigger the interrupt mechanism, stops cleanly at the end of the queue | IT-20, IT-21, IT-22 |
+| requirements §4.4 / design §3.2, §3.4 | Queue auto-advance: progresses without manual `/next`, doesn't trigger the interrupt mechanism, stops cleanly at the end of the queue and resets state like `/stop` | IT-20, IT-21, IT-22, IT-23 |
 | requirements §5 | Track has no stored position; Album/Playlist order preserved | UT-4, UT-5, IT-2 |
 | requirements §6 / design §5 | Index + playlists on Jetson-local storage; drive holds only mp3s | IT-15, DT-1 |
 | design §3.1 | Incremental indexing, no re-tagging of known paths, title-tag/filename name derivation | UT-1, UT-2, UT-3, UT-7 |
@@ -103,6 +103,7 @@ Assume a clean daemon start against the fixture drive/playlists before this bloc
 | IT-20 | Queue auto-advances without manual `/next` | `/play` an album (fixture `AlbumX`, tracks First/Second), then `curl http://<host>/stream -o out.mp3` in the foreground and let it run to completion with no `/next` calls in between. | `curl` exits 0; `out.mp3` is byte-for-byte identical to First's bytes immediately followed by Second's bytes concatenated (raw passthrough, no framing between them) — confirms the connection continued into track 2 on its own (requirements §4.4, design §3.4). |
 | IT-21 | Auto-advance doesn't trigger the interrupt mechanism | Same setup as IT-20, streaming through the First→Second boundary. | `curl` exits 0 (not the transfer-error exit `curl: (18) ...` seen in IT-12/IT-13/IT-19c) — confirms crossing a queue boundary via auto-advance does **not** bump `generation` and does not abort the connection the way an external `/play`/`/stop`/`/next`/`/previous` does (design §3.2/§3.4). |
 | IT-22 | Auto-advance stops cleanly at the end of the queue | Same as IT-20 but let `curl` run through both First and Second to the very end. | After Second's bytes, the stream ends cleanly (`curl` exits 0, no further data) — no attempt to auto-advance past the last track; `out.mp3`'s total size equals exactly First + Second's combined byte count, no more. |
+| IT-23 | Reconnecting after queue exhaustion gets 404, not a replay | Immediately following IT-22 (queue just finished naturally, no `/stop` issued), call `GET /stream` again. | `404 nothing playing` — same response as after an explicit `/stop` (IT-13). Confirms `current_track`/`status` are reset when the queue runs out (design §3.4 case 2), not left pointing at the finished last track — a naive reconnect-on-any-disconnect client must not replay Second forever. |
 
 ## 7. Storage & Persistence Tests
 

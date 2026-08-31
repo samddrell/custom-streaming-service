@@ -255,22 +255,34 @@ unchanged from before this method existed.
         handle, continuing exactly where it left off.
    - Streams in fixed-size blocks (e.g. 64 KB) between these checks.
    - If the file completes normally (EOF), this is where queue auto-advance (requirements §4.4)
-     happens, instead of unconditionally ending the response:
-     1. Lock `PlaybackSession`. If `queue_position + 1 < current_queue.size()`, call
-        `session_.advance(+1)` — the *same* method `/next` uses (§3.2) — then open a fresh
-        `std::ifstream` on the new `current_track`'s file (same as the file open at stream
-        start) and continue the content-provider loop on this same connection: no `sink.done()`,
-        `Transfer-Encoding: chunked` just keeps going with the next track's bytes.
-     2. Otherwise (already on the last track), end exactly as before: `sink.done()`.
-     Auto-advance deliberately does **not** bump `generation` and does **not** call
-     `cv.notify_all()` — this is the same playback session continuing, not an interrupt, so there
-     is nothing external to wake or to tell to abort. This also means the existing interrupt
-     check at the top of the loop is unaffected by this change: an external `/play`/`/stop`/
-     `/next`/`/previous` from another client still aborts the stream exactly as it did before —
-     auto-advance and the interrupt mechanism can't be confused with each other, because only one
-     of them ever touches `generation`.
-   - If the file completes normally and there's nothing left in the queue, ends cleanly
-     (`sink.done()`), same as a single track finishing today.
+     happens, instead of unconditionally ending the response. Locks `PlaybackSession` and calls
+     `session_.advance(+1)` — the *same* method `/next` uses (§3.2); it does its own bounds
+     check internally, there's no separate pre-check here — then, still under that lock, branches
+     on the result:
+     1. **`advance(+1)` succeeds** (there was another track queued): unlocks, then reopens the
+        *same* `std::ifstream` handle on the new `current_track`'s file (`close()` then `open()`
+        — not a new stream object, the existing one is reused) and continues the content-provider
+        loop on this same connection: no `sink.done()`, `Transfer-Encoding: chunked` just keeps
+        going with the next track's bytes. The file reopen happens **after** releasing the lock —
+        it's real disk I/O, and the "no I/O while holding the lock" principle (§4) still applies
+        here same as everywhere else.
+     2. **`advance(+1)` fails** (already on the last track — queue exhausted): while still under
+        the lock, resets session state the same way `handleStop` does — `current_track.reset()`,
+        `current_queue.clear()`, `queue_position = 0`, `status = Stopped` — then unlocks and ends
+        with `sink.done()`, same clean terminator as before. Does **not** bump `generation` or
+        call `cv.notify_all()`, for the same reason case 1 doesn't: this isn't an interrupt, it's
+        this connection's own natural end, so there's no other listener to wake or tell to abort.
+        Without this reset, a client reconnecting after the whole queue finishes would find
+        `current_track` still pointing at the last track and just replay it from byte 0 forever —
+        the same failure auto-advance was built to fix, one level up (requirements §4.4). With
+        it, that reconnect gets `404 nothing playing`, identical to an explicit `/stop`.
+     Auto-advance deliberately does **not** bump `generation` in either branch, and does **not**
+     call `cv.notify_all()` — this is the same playback session continuing (or ending on its own),
+     not an interrupt, so there is nothing external to wake or to tell to abort. This also means
+     the existing interrupt check at the top of the loop is unaffected by this change: an external
+     `/play`/`/stop`/`/next`/`/previous` from another client still aborts the stream exactly as it
+     did before — auto-advance and the interrupt mechanism can't be confused with each other,
+     because only one of them ever touches `generation`.
 
 No busy-polling loop is needed: the interrupt check rides on cpp-httplib's natural per-chunk
 callback, and the pause check blocks efficiently on the condition variable instead of spinning.
@@ -378,3 +390,7 @@ playback-controld/
 - ~~Queue auto-advance~~ — resolved, see §3.2/§3.4 and requirements §4.4. Added after the gap was
   found while designing `cli-lib-controld`: a multi-track `/play` built a real queue, but nothing
   ever advanced through it without a manual `/next` per track.
+- ~~Queue-exhaustion state reset~~ — resolved, see §3.4's case 2 and requirements §4.4. A
+  follow-up found while designing `cli-lib-controld`'s reconnect logic: the original auto-advance
+  left `current_track`/`status` stale once the queue ran out, so a naively-reconnecting client
+  would replay the last track forever instead of getting `404`. Now treated like `/stop`.

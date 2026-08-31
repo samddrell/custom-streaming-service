@@ -111,15 +111,24 @@ that queue automatically as each track finishes — a client does not have to ca
 every track for ordinary queue playback to work end to end on one long-lived `/stream` connection.
 `/next`/`/previous` remain available for user-directed control (skip ahead, go back) and behave
 exactly as before. Auto-advance only moves forward through the queue in order; it never loops
-back to the start and never wraps past the end. When the last track in the queue finishes,
-playback ends the same way a single track finishing already does today: the stream ends cleanly,
-with nothing further to advance to.
+back to the start and never wraps past the end. When the last track in the queue finishes, this
+is treated exactly like a `/stop`: session state resets (`current_track` cleared, status becomes
+`Stopped`) instead of being left pointing at the now-finished last track, and the stream ends
+cleanly, with nothing further to advance to.
 
 This was identified as a gap while designing the CLI client (`cli-lib-controld`): the queue
 resolved by `/play` was real, but nothing ever advanced through it automatically, so a client
 naively reconnecting to `/stream` after a clean track end would just re-fetch the same
 still-current track from byte 0, forever — never a real streaming *service*, just repeated
 single-file playback gated by manual `/next` calls.
+
+The "treat queue-exhaustion like `/stop`" behavior above closes a second-order version of the
+same problem: without it, a client reconnecting after the *whole queue* (not just one track)
+finishes would find `current_track` still set to the last track played and just replay it from
+the start, forever — the exact same failure mode, one level up. Resetting state here means any
+client can use one uniform reconnect rule ("on any disconnect, reconnect; `404` means stop") for
+every case — mid-queue advance, external interrupt, and queue exhaustion alike — without needing
+to distinguish a clean stream completion from an aborted one.
 
 ## 5. Data Model
 
