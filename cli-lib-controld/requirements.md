@@ -129,9 +129,12 @@ should:
   retrying" from "daemon is genuinely down" is future scope if it turns out to matter in
   practice.)
 
-Because `gj listen` never needs to tell a clean completion apart from an aborted one — both just
-trigger "reconnect and see what happens" — it doesn't need to inspect the HTTP client library's
-success/error result at all; checking the reconnect's status code (`200` vs `404`) is sufficient.
+`gj listen` never needs to tell a clean completion apart from an aborted one, since both lead to
+the same next action ("reconnect") — but it does need to check whether the reconnect attempt
+itself produced *any* usable HTTP response before it can look at a status code at all: an
+aborted/interrupted transfer and a genuine network failure both come back as no response to
+inspect (see design.md for exactly what that looks like against the HTTP client library in use).
+Only once a full response comes back does checking `200` vs `404` apply.
 
 ### 5.3 Audio playback
 
@@ -161,10 +164,8 @@ Jetson gets a new DHCP lease, a static reservation is set up, etc.) — since th
 hardcoded constant per §6, that would require a rebuild rather than a config change, which is
 an accepted tradeoff for v1's simplicity but worth knowing about going in.
 
-**Dependency on `playback-controld`:** §5.2's simplified reconnect logic assumes
-`playback-controld` resets `current_track`/`status` to the same state `/stop` produces when the
-queue finishes naturally via auto-advance. That reset is not yet implemented as of this writing
-— it's a small follow-up to the already-merged auto-advance work, tracked separately in
-`playback-controld`'s own docs. Don't start implementing `gj listen` against this section until
-that lands, or the last track of every queue will loop forever (see the discussion that led to
-this section for why).
+~~**Dependency on `playback-controld`**~~ — resolved. §5.2's simplified reconnect logic depends
+on `playback-controld` resetting `current_track`/`status` to the same state `/stop` produces
+when the queue finishes naturally via auto-advance; that reset has landed on `master`
+(`playback-controld` requirements.md §4.4, design.md §3.4 case 2), so `design.md` below can be
+written against §5.2 as-is.
