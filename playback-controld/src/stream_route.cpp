@@ -1,6 +1,8 @@
 #include "stream_route.h"
 
+#include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 
 #include <json.hpp>
@@ -70,7 +72,31 @@ void StreamRoute::handleStream(const httplib::Request&, httplib::Response& res) 
           return false;
         }
         if (n == 0 || file->eof()) {
-          sink.done();
+          // Queue auto-advance (requirements.md §4.4, design.md §3.4): if there's another track
+          // queued after this one, move to it and keep streaming on this same connection instead
+          // of ending the response. Deliberately does not touch `generation` or notify `cv` —
+          // this is the same playback session continuing, not an interrupt (§3.2), so the
+          // interrupt check above is unaffected by this branch.
+          bool advanced = false;
+          std::filesystem::path next_path;
+          {
+            std::lock_guard<std::mutex> lock(session_.mutex);
+            advanced = session_.advance(+1);
+            if (advanced) {
+              next_path = library_.resolveAbsolutePath(*session_.current_track);
+            }
+          }
+          if (!advanced) {
+            sink.done();
+            return true;
+          }
+          file->close();
+          file->open(next_path, std::ios::binary);
+          if (!file->is_open()) {
+            std::cerr << "playback-controld: warning: auto-advance target file unavailable: "
+                      << next_path << "\n";
+            return false;
+          }
         }
         return true;
       });

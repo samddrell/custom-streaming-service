@@ -16,6 +16,8 @@ without a rewrite.
 - A single daemon, `playback-controld`, running on the Jetson.
 - HTTP control endpoints (invoked via curl) to select and control playback.
 - An HTTP endpoint that streams the currently-playing track as raw mp3 bytes.
+- Automatic progression through a multi-track queue (album/artist/playlist) as each track
+  finishes, without requiring a `/next` call per track (§4.4).
 - A music management module (in-process, behind an internal interface) that indexes and
   serves music from a USB-C drive: playlists, artists, albums, tracks.
 - Basic ID3-derived metadata per track: artist, album, duration.
@@ -101,6 +103,23 @@ clean end-of-stream), so `curl` on the interrupted listener's side surfaces its 
 diagnostic on stderr (e.g. `curl: (18) transfer closed with ... bytes remaining`) — this is the
 alert, using the existing connection rather than a separate notification mechanism.
 Multiple simultaneous listeners are out of scope for v1.
+
+### 4.4 Queue auto-advance
+
+When `/play` resolves to a multi-track queue (album/artist/playlist), playback advances through
+that queue automatically as each track finishes — a client does not have to call `/next` between
+every track for ordinary queue playback to work end to end on one long-lived `/stream` connection.
+`/next`/`/previous` remain available for user-directed control (skip ahead, go back) and behave
+exactly as before. Auto-advance only moves forward through the queue in order; it never loops
+back to the start and never wraps past the end. When the last track in the queue finishes,
+playback ends the same way a single track finishing already does today: the stream ends cleanly,
+with nothing further to advance to.
+
+This was identified as a gap while designing the CLI client (`cli-lib-controld`): the queue
+resolved by `/play` was real, but nothing ever advanced through it automatically, so a client
+naively reconnecting to `/stream` after a clean track end would just re-fetch the same
+still-current track from byte 0, forever — never a real streaming *service*, just repeated
+single-file playback gated by manual `/next` calls.
 
 ## 5. Data Model
 

@@ -187,6 +187,22 @@ a stream currently blocked waiting out a pause wakes up immediately on any of: `
 changes to `Playing`), or `/play`/`/stop`/`/next`/`/previous` (generation changes, superseding
 it regardless of whether it happened to be paused at the time).
 
+`PlaybackSession` also owns the "move through the queue" logic itself, as one method used by both
+`ControlRoutes` (`/next`/`/previous`) and `StreamRoute`'s queue auto-advance (§3.4/requirements
+§4.4), so it exists in exactly one place:
+
+```cpp
+// Moves queue_position by `direction` (+1 or -1) if the result is in bounds, updating
+// current_track to match. Returns false (no state change) if there's nowhere to move to.
+// Caller must already hold `mutex` — this does not lock internally, since every call site
+// (advanceQueue and StreamRoute's EOF check) already holds it when it needs to call this.
+bool advance(int direction);
+```
+
+`/next`/`/previous` bump `generation` and call `cv.notify_all()` themselves, same as before —
+`advance()` only does the queue-position/current-track bookkeeping, not the interrupt signaling,
+since auto-advance calls the same method *without* wanting either of those side effects (§3.4).
+
 ### 3.3 `ControlRoutes`
 
 HTTP handlers registered on the shared server for:
@@ -203,6 +219,11 @@ HTTP handlers registered on the shared server for:
 
 All responses are JSON: `{"ok": true, ...}` or `{"ok": false, "error": "..."}` with a
 corresponding non-2xx HTTP status.
+
+`/next` and `/previous`'s queue-position/current-track bookkeeping is `PlaybackSession::advance()`
+(§3.2) — `advanceQueue` locks the mutex, calls `advance(direction)`, and on success bumps
+`generation` and notifies `cv` before unlocking; on failure (out of bounds) it returns 409,
+unchanged from before this method existed.
 
 ### 3.4 `StreamRoute`
 
@@ -233,10 +254,28 @@ corresponding non-2xx HTTP status.
         way as (1); otherwise proceeds to read and send the next block from the still-open file
         handle, continuing exactly where it left off.
    - Streams in fixed-size blocks (e.g. 64 KB) between these checks.
-   - If the file completes normally, ends cleanly.
+   - If the file completes normally (EOF), this is where queue auto-advance (requirements §4.4)
+     happens, instead of unconditionally ending the response:
+     1. Lock `PlaybackSession`. If `queue_position + 1 < current_queue.size()`, call
+        `session_.advance(+1)` — the *same* method `/next` uses (§3.2) — then open a fresh
+        `std::ifstream` on the new `current_track`'s file (same as the file open at stream
+        start) and continue the content-provider loop on this same connection: no `sink.done()`,
+        `Transfer-Encoding: chunked` just keeps going with the next track's bytes.
+     2. Otherwise (already on the last track), end exactly as before: `sink.done()`.
+     Auto-advance deliberately does **not** bump `generation` and does **not** call
+     `cv.notify_all()` — this is the same playback session continuing, not an interrupt, so there
+     is nothing external to wake or to tell to abort. This also means the existing interrupt
+     check at the top of the loop is unaffected by this change: an external `/play`/`/stop`/
+     `/next`/`/previous` from another client still aborts the stream exactly as it did before —
+     auto-advance and the interrupt mechanism can't be confused with each other, because only one
+     of them ever touches `generation`.
+   - If the file completes normally and there's nothing left in the queue, ends cleanly
+     (`sink.done()`), same as a single track finishing today.
 
 No busy-polling loop is needed: the interrupt check rides on cpp-httplib's natural per-chunk
 callback, and the pause check blocks efficiently on the condition variable instead of spinning.
+Auto-advance doesn't add polling either — it's a check made once, exactly at the moment a file's
+`read()` reports EOF, on the same thread already running that connection's callback.
 
 ## 4. Concurrency Model
 
@@ -336,3 +375,6 @@ playback-controld/
   (e.g. a `/status` or `/health` endpoint) — not currently in scope, no such route exists yet.
   Noted for later.
 - ~~systemd unit file contents~~ — resolved, see §7.
+- ~~Queue auto-advance~~ — resolved, see §3.2/§3.4 and requirements §4.4. Added after the gap was
+  found while designing `cli-lib-controld`: a multi-track `/play` built a real queue, but nothing
+  ever advanced through it without a manual `/next` per track.

@@ -206,14 +206,9 @@ void ControlRoutes::advanceQueue(httplib::Response& res, int direction) {
     if (session_.status == PlaybackSession::Status::Stopped || session_.current_queue.empty()) {
       nothing_playing = true;
     } else {
-      long next_position = static_cast<long>(session_.queue_position) + direction;
-      if (next_position < 0 || next_position >= static_cast<long>(session_.current_queue.size())) {
-        ok = false;
-      } else {
-        session_.queue_position = static_cast<size_t>(next_position);
-        session_.current_track = session_.current_queue[session_.queue_position];
+      ok = session_.advance(direction);
+      if (ok) {
         ++session_.generation;
-        ok = true;
         new_track = *session_.current_track;
       }
     }
