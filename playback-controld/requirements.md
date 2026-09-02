@@ -130,6 +130,22 @@ client can use one uniform reconnect rule ("on any disconnect, reconnect; `404` 
 every case — mid-queue advance, external interrupt, and queue exhaustion alike — without needing
 to distinguish a clean stream completion from an aborted one.
 
+### 4.5 Server write timeout must tolerate a slow, paced consumer
+
+A client legitimately consuming `/stream` at real playback speed (rather than downloading as
+fast as possible) will routinely stall the server's outgoing write for multi-second stretches —
+this is expected, not a sign of a broken connection, and the server must not treat it as one.
+`playback-controld` sets an explicit, generous write timeout (currently 3600 seconds) rather than
+relying on the underlying HTTP library's default, which is tuned for ordinary request/response
+traffic, not a deliberately slow, long-lived stream.
+
+Found via real testing (`gj listen` against real hardware): the default 5-second write timeout
+was aborting connections mid-track whenever the client's own playback backend paused draining for
+more than 5 seconds (a normal, frequent occurrence for a real-time audio consumer) — which
+produced a cascade of second-order symptoms (repeated restarts, the queue never reaching genuine
+EOF so auto-advance never fired, external interrupts taking a long time to be detected) all
+traceable back to this one value. Full diagnosis: `streaming-backpressure-fix.md` (repo root).
+
 ## 5. Data Model
 
 A common base structure is shared by playlists, artists, and albums, differentiated by how

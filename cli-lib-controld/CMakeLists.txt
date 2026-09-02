@@ -16,6 +16,7 @@ add_library(gj_core
     src/commands.cpp
     src/output.cpp
     src/listen_command.cpp
+    src/audio_buffer.cpp
 )
 target_include_directories(gj_core PUBLIC
     src
