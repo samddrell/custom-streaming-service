@@ -28,16 +28,16 @@ list. Remaining test-plan.md work: IT-14/IT-15/IT-16/IT-17 (browse/storage/playl
 `playlists.json` doesn't exist yet since it's hand-authored) and the DT-* deployment tests (need
 an actual reboot + systemd install on the Jetson, not just running the binary manually).
 
-Queue auto-advance (requirements.md §4.4, design.md §3.2/§3.4) has merged into `master` (PR #1)
-— `PlaybackSession::advance()`, `StreamRoute`'s EOF handling. IT-20/21/22 still need running
-against the real drive; don't treat them as passing until that's actually done.
+Queue auto-advance (requirements.md §4.4, design.md §3.2/§3.4) and the queue-exhaustion state
+reset (requirements.md §4.4, design.md §3.4 case 2) have both merged into `master` (PRs #1, #3).
 
-**In progress (`auto-advance-stop-fix` branch, off `master`):** a follow-up gap found while
-designing `cli-lib-controld`'s reconnect logic — when the queue runs out, `StreamRoute` needs to
-reset session state the same way `/stop` does (see the "Queue auto-advance" load-bearing
-decision below), or a reconnecting client replays the last track forever instead of getting
-`404`. Docs are updated (requirements §4.4, design §3.4 case 2, test-plan IT-23); code change to
-`stream_route.cpp`'s exhausted branch still needs implementing/testing before this merges.
+**In progress (`streaming-backpressure-fix` branch, off `master`):** the server write timeout
+(requirements.md §4.5, design.md §4) — found while real-hardware-testing `cli-lib-controld`'s
+`gj listen`, and diagnosed jointly with a client-side fix in that project (see
+`streaming-backpressure-fix.md` at the repo root for the full cross-project diagnosis). Code
+change: `server.set_write_timeout(3600, 0)` in `main.cpp`. Simple enough that it may already be
+implemented and tested by the time you're reading this — check `main.cpp` directly rather than
+trusting this note's tense.
 
 ## Load-bearing decisions (don't relitigate these without checking with the user first)
 
@@ -106,6 +106,14 @@ decision below), or a reconnecting client replays the last track forever instead
   another name. Don't add it back for "robustness" without checking — that's exactly the kind
   of scope creep this project has been pushing back on throughout.
 - **No auth, no TLS.** Trusted WiFi VLAN only, by design (requirements.md §7), not an oversight.
+- **`server.set_write_timeout(3600, 0)` in `main.cpp` (requirements.md §4.5, design.md §4).**
+  `cpp-httplib`'s default (5s) is tuned for ordinary request/response traffic and was aborting
+  `/stream` connections mid-track whenever a client legitimately paced its consumption to real
+  playback speed — normal, frequent behavior for a real-time audio consumer, not a broken
+  connection. Don't shrink this back down "for responsiveness" without checking — that's exactly
+  the failure mode this fixes. Full diagnosis in `streaming-backpressure-fix.md` (repo root),
+  including a paired client-side fix in `cli-lib-controld` (a bounded producer/consumer buffer)
+  that this timeout change is meant to complement, not replace.
 - **Explicitly out of scope for v1**: seek, volume control, multiple simultaneous `/stream`
   listeners, USB hot-plug handling, any non-curl client, and a playlist-authoring API
   (`playlists.json` is hand-edited by the user directly).

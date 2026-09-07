@@ -30,6 +30,13 @@ int main() {
   PlaybackSession session;
 
   httplib::Server server;
+  // cpp-httplib defaults CPPHTTPLIB_SERVER_WRITE_TIMEOUT_SECOND to 5 -- far too short for a
+  // client legitimately pacing itself to real playback speed (found via real testing: a slow,
+  // paced consumer stalls a chunk write for multi-second stretches routinely, well within normal
+  // operation, and the 5s default was killing those connections as if they'd failed). Matches
+  // gj's own set_read_timeout(3600, 0) for the same reason on the client side
+  // (streaming-backpressure-fix.md).
+  server.set_write_timeout(3600, 0);
   ControlRoutes control_routes(library, session);
   control_routes.registerRoutes(server);
   StreamRoute stream_route(library, session);

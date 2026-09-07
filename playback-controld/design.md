@@ -305,6 +305,19 @@ stream never blocks control requests or vice versa.
 This gives the separation you were after — control logic and streaming logic are distinct
 classes at runtime — without introducing IPC or a second process.
 
+**Write timeout (requirements §4.5):** `main.cpp` calls `server.set_write_timeout(3600, 0)`
+right after constructing `httplib::Server`, overriding `cpp-httplib`'s
+`CPPHTTPLIB_SERVER_WRITE_TIMEOUT_SECOND` default of 5 seconds. This is a server-level setting,
+not per-connection — it governs how long a single `sink.write()` call inside `StreamRoute`'s
+content-provider is allowed to block (waiting on TCP flow control from a client that isn't
+draining its receive buffer fast enough) before `cpp-httplib` gives up and aborts that
+connection. 5 seconds is tuned for ordinary request/response traffic, not a stream a client is
+deliberately consuming at real playback speed — a real-time audio consumer routinely stalls
+draining for several seconds at a time (e.g. while its own playback backend buffers ahead, then
+coasts without touching its input for a while) as completely normal behavior, not a sign of a
+stuck connection. See `streaming-backpressure-fix.md` (repo root) for the full diagnosis this
+was found through.
+
 ## 5. Storage & Persistence
 
 - USB-C drive mounted at a fixed path, `/mnt/x10pro`, before `playback-controld` starts (no

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdio>
+#include <functional>
 #include <string>
 
 #include <httplib.h>
@@ -24,10 +25,15 @@ class HttpClient {
 
   struct StreamResult {
     enum class Outcome { ConnectionFailed, NothingPlaying, StreamEnded } outcome;
-    bool received_data = false;  // true if >=1 audio byte was written to `sink` this attempt
+    bool received_data = false;  // true if >=1 audio byte was handed to `sink` this attempt
     std::string message;         // populated for NothingPlaying: the daemon's own "error" field
   };
-  StreamResult stream(const std::string& path, FILE* sink);  // GET /stream, for gj listen
+  // `sink` receives each chunk of audio as it arrives; returning false aborts the transfer, same
+  // convention as httplib's own content-receiver. HttpClient doesn't know or care what `sink`
+  // actually does with the bytes (write to mpv's pipe directly, push into a buffer, ...) --
+  // that's ListenCommand's concern (design.md §3.5/§4, streaming-backpressure-fix.md).
+  using ChunkSink = std::function<bool(const char* data, size_t len)>;
+  StreamResult stream(const std::string& path, const ChunkSink& sink);  // GET /stream
 
  private:
   httplib::Client client_;

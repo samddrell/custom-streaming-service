@@ -48,7 +48,7 @@ ApiResult HttpClient::post(const std::string& path) { return toApiResult(client_
 
 ApiResult HttpClient::get(const std::string& path) { return toApiResult(client_.Get(path)); }
 
-HttpClient::StreamResult HttpClient::stream(const std::string& path, FILE* sink) {
+HttpClient::StreamResult HttpClient::stream(const std::string& path, const ChunkSink& sink) {
   int status = 0;
   bool wrote_audio = false;
   std::string error_body;
@@ -65,7 +65,7 @@ HttpClient::StreamResult HttpClient::stream(const std::string& path, FILE* sink)
           return true;
         }
         wrote_audio = wrote_audio || len > 0;
-        return fwrite(data, 1, len, sink) == len;  // false here also aborts httplib's read loop
+        return sink(data, len);  // false here also aborts httplib's read loop
       });
 
   if (!res) {
